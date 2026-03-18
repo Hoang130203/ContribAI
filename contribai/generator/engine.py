@@ -56,8 +56,8 @@ class ContributionGenerator:
 
             response = await self._llm.complete(prompt, system=system, temperature=0.2)
 
-            # 3: Parse output
-            changes = self._parse_changes(response)
+            # 3: Parse output → apply search/replace to original content
+            changes = self._parse_changes(response, context)
             if not changes:
                 logger.warning("No valid changes parsed for finding: %s", finding.title)
                 return None
@@ -169,28 +169,64 @@ class ContributionGenerator:
                 f"```\n{current_content[:4000]}\n```\n"
             )
 
-        prompt += (
-            "\n## Output Format\n"
-            "Return your changes as a JSON object with this structure:\n"
-            "```json\n"
-            "{\n"
-            '  "changes": [\n'
-            "    {\n"
-            '      "path": "path/to/file.py",\n'
-            '      "content": "full new content of the file",\n'
-            '      "is_new_file": false\n'
-            "    }\n"
-            "  ]\n"
-            "}\n"
-            "```\n"
-            "Include ONLY the files that need changes. Provide the FULL content of each "
-            "changed file, not just the diff.\n"
-        )
+        prompt += "\n## Output Format\nReturn your changes as a JSON object.\n\n"
+
+        if current_content:
+            # For EXISTING files: use search/replace blocks to preserve content
+            prompt += (
+                "Since this is an EXISTING file, use SEARCH/REPLACE blocks "
+                "to make targeted edits. DO NOT rewrite the entire file.\n\n"
+                "```json\n"
+                "{\n"
+                '  "changes": [\n'
+                "    {\n"
+                '      "path": "path/to/file",\n'
+                '      "is_new_file": false,\n'
+                '      "edits": [\n'
+                "        {\n"
+                '          "search": "exact text to find in the file",\n'
+                '          "replace": "replacement text"\n'
+                "        }\n"
+                "      ]\n"
+                "    }\n"
+                "  ]\n"
+                "}\n"
+                "```\n\n"
+                "RULES for search/replace:\n"
+                "- `search` must be an EXACT substring from the current file\n"
+                "- `replace` is what replaces it (can be longer/shorter)\n"
+                "- To ADD new content, search for the text BEFORE the insertion "
+                "point and include it + the new content in `replace`\n"
+                "- To DELETE content, set `replace` to empty string\n"
+                "- Keep each edit small and focused\n"
+                "- DO NOT include the entire file in search or replace\n"
+            )
+        else:
+            # For NEW files: provide full content
+            prompt += (
+                "Since this is a NEW file, provide the full content:\n\n"
+                "```json\n"
+                "{\n"
+                '  "changes": [\n'
+                "    {\n"
+                '      "path": "path/to/file",\n'
+                '      "content": "full content of the new file",\n'
+                '      "is_new_file": true\n'
+                "    }\n"
+                "  ]\n"
+                "}\n"
+                "```\n"
+            )
 
         return prompt
 
-    def _parse_changes(self, response: str) -> list[FileChange]:
-        """Parse LLM response into FileChange objects."""
+    def _parse_changes(self, response: str, context: RepoContext) -> list[FileChange]:
+        """Parse LLM response into FileChange objects.
+
+        Supports two formats:
+        1. Search/replace blocks (for existing files) — applies edits to original
+        2. Full content (for new files) — uses content as-is
+        """
         changes: list[FileChange] = []
 
         try:
@@ -210,16 +246,62 @@ class ContributionGenerator:
             raw_changes = data.get("changes", [])
 
             for item in raw_changes:
-                if not isinstance(item, dict) or "path" not in item or "content" not in item:
+                if not isinstance(item, dict) or "path" not in item:
                     continue
 
-                changes.append(
-                    FileChange(
-                        path=item["path"],
-                        new_content=item["content"],
-                        is_new_file=item.get("is_new_file", False),
+                path = item["path"]
+                is_new = item.get("is_new_file", False)
+
+                if "edits" in item and not is_new:
+                    # Search/replace mode — apply edits to original content
+                    original = context.relevant_files.get(path, "")
+                    if not original:
+                        logger.warning("No original content for %s, skipping edits", path)
+                        continue
+
+                    new_content = original
+                    edits_applied = 0
+                    for edit in item["edits"]:
+                        search = edit.get("search", "")
+                        replace = edit.get("replace", "")
+                        if not search:
+                            continue
+                        if search in new_content:
+                            new_content = new_content.replace(search, replace, 1)
+                            edits_applied += 1
+                        else:
+                            logger.warning(
+                                "Search text not found in %s: %s...",
+                                path,
+                                search[:60],
+                            )
+
+                    if edits_applied == 0:
+                        logger.warning("No edits applied to %s", path)
+                        continue
+
+                    logger.info(
+                        "Applied %d search/replace edits to %s",
+                        edits_applied,
+                        path,
                     )
-                )
+                    changes.append(
+                        FileChange(
+                            path=path,
+                            new_content=new_content,
+                            is_new_file=False,
+                        )
+                    )
+
+                elif "content" in item:
+                    # Full content mode (new files or fallback)
+                    changes.append(
+                        FileChange(
+                            path=path,
+                            new_content=item["content"],
+                            is_new_file=is_new,
+                        )
+                    )
 
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             logger.warning("Failed to parse changes JSON: %s", e)

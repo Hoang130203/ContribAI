@@ -94,7 +94,14 @@ class TestGeneratePRTitle:
 
 
 class TestParseChanges:
-    def test_parse_json_response(self, generator):
+    @pytest.fixture
+    def mock_context(self, sample_repo):
+        return RepoContext(
+            repo=sample_repo,
+            relevant_files={"src/config.py": "API_KEY = 'sk-1234'\n"},
+        )
+
+    def test_parse_json_response(self, generator, mock_context):
         response = """Here is the fix:
 ```json
 {
@@ -107,29 +114,54 @@ class TestParseChanges:
   ]
 }
 ```"""
-        changes = generator._parse_changes(response)
+        changes = generator._parse_changes(response, mock_context)
         assert len(changes) == 1
         assert changes[0].path == "src/config.py"
         assert not changes[0].is_new_file
 
-    def test_parse_new_file(self, generator):
+    def test_parse_new_file(self, generator, mock_context):
         response = """```json
 {"changes": [{"path": "new_file.py", "content": "print('hello')", "is_new_file": true}]}
 ```"""
-        changes = generator._parse_changes(response)
+        changes = generator._parse_changes(response, mock_context)
         assert len(changes) == 1
         assert changes[0].is_new_file is True
 
-    def test_parse_invalid_json(self, generator):
+    def test_parse_invalid_json(self, generator, mock_context):
         response = "This is not JSON at all"
-        changes = generator._parse_changes(response)
+        changes = generator._parse_changes(response, mock_context)
         assert len(changes) == 0
 
-    def test_enforces_max_files(self, generator):
-        many_changes = [{"path": f"file{i}.py", "content": "x"} for i in range(20)]
+    def test_enforces_max_files(self, generator, mock_context):
+        many_changes = [
+            {"path": f"file{i}.py", "content": "x", "is_new_file": True} for i in range(20)
+        ]
         response = f'{{"changes": {many_changes}}}'.replace("'", '"')
-        changes = generator._parse_changes(response)
+        changes = generator._parse_changes(response, mock_context)
         assert len(changes) <= generator._config.max_files_per_pr
+
+    def test_parse_search_replace(self, generator, mock_context):
+        """Test search/replace mode preserves original content."""
+        response = """```json
+{
+  "changes": [
+    {
+      "path": "src/config.py",
+      "is_new_file": false,
+      "edits": [
+        {
+          "search": "API_KEY = 'sk-1234'",
+          "replace": "API_KEY = os.getenv('API_KEY', '')"
+        }
+      ]
+    }
+  ]
+}
+```"""
+        changes = generator._parse_changes(response, mock_context)
+        assert len(changes) == 1
+        assert "os.getenv" in changes[0].new_content
+        assert not changes[0].is_new_file
 
 
 class TestSelfReview:
