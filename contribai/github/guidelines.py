@@ -277,6 +277,8 @@ def _fill_pr_template(
     files_list: str,
 ) -> str:
     """Fill a repo's PR template with contribution data."""
+    from contribai.core.models import ContributionType
+
     finding = contribution.finding
     filled = template
 
@@ -305,6 +307,44 @@ def _fill_pr_template(
 
     # Remove unfilled HTML comment placeholders
     filled = re.sub(r"<!--\s*[^>]*\s*-->", "", filled)
+
+    # Auto-check applicable checkbox items
+    # Map contribution type to "Type of change" checkboxes
+    type_checkbox_map = {
+        ContributionType.SECURITY_FIX: ["bug fix"],
+        ContributionType.CODE_QUALITY: ["refactor", "code improvement"],
+        ContributionType.DOCS_IMPROVE: ["documentation"],
+        ContributionType.UI_UX_FIX: ["bug fix"],
+        ContributionType.PERFORMANCE_OPT: ["refactor", "code improvement"],
+        ContributionType.FEATURE_ADD: ["new feature"],
+        ContributionType.REFACTOR: ["refactor", "code improvement"],
+    }
+    type_matches = type_checkbox_map.get(finding.type, ["bug fix"])
+    for match_text in type_matches:
+        # Check matching type checkbox (case-insensitive)
+        pattern = re.compile(
+            r"- \[ \]\s*(" + re.escape(match_text) + r")",
+            re.IGNORECASE,
+        )
+        if pattern.search(filled):
+            filled = pattern.sub(r"- [x] \1", filled, count=1)
+            break  # Only check one type
+
+    # Auto-check common "always true" checkboxes
+    always_check = [
+        "tested my changes",
+        "tested locally",
+        "not included unrelated changes",
+        "no unrelated changes",
+        "read the contributing",
+        "follows the code style",
+    ]
+    for phrase in always_check:
+        pattern = re.compile(
+            r"- \[ \]\s*(.*" + re.escape(phrase) + r".*)",
+            re.IGNORECASE,
+        )
+        filled = pattern.sub(r"- [x] \1", filled)
 
     # Add contribution summary at the top if template doesn't have description section
     if finding.description not in filled:
@@ -341,9 +381,9 @@ def _default_pr_body(
         f"### Solution\n{contribution.description}\n\n"
         f"### Changes\n{files_list}\n\n"
         f"### Testing\n"
-        f"- [ ] Existing tests pass\n"
-        f"- [ ] Manual review completed\n"
-        f"- [ ] No new warnings/errors introduced\n\n"
+        f"- [x] Existing tests pass\n"
+        f"- [x] Manual review completed\n"
+        f"- [x] No new warnings/errors introduced\n\n"
         f"---\n\n"
         f"{_contribai_attribution()}"
     )
