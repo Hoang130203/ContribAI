@@ -21,6 +21,7 @@ from contribai.core.models import (
 from contribai.generator.engine import ContributionGenerator
 from contribai.github.client import GitHubClient
 from contribai.github.discovery import RepoDiscovery
+from contribai.github.guidelines import fetch_repo_guidelines
 from contribai.llm.provider import create_llm_provider
 from contribai.orchestrator.memory import Memory
 from contribai.pr.manager import PRManager
@@ -257,6 +258,15 @@ class ContribPipeline:
         logger.info("=" * 60)
         logger.info("📦 Processing: %s", repo.full_name)
 
+        # Fetch repo guidelines (CONTRIBUTING.md, PR template)
+        guidelines = await fetch_repo_guidelines(self._github, repo.owner, repo.name)
+        if guidelines.has_guidelines:
+            logger.info(
+                "📋 Repo guidelines: commit=%s, %d template sections",
+                guidelines.commit_format,
+                len(guidelines.required_sections),
+            )
+
         # Analyze — set task context for model routing
         logger.info("🔬 Analyzing code...")
         self._set_task("analysis")
@@ -306,7 +316,7 @@ class ContribPipeline:
         for finding in analysis.top_findings[:max_prs]:
             logger.info("🛠️ Generating fix for: %s", finding.title)
             self._set_task("code_gen")
-            contribution = await self._generator.generate(finding, context)
+            contribution = await self._generator.generate(finding, context, guidelines=guidelines)
 
             if not contribution:
                 continue
@@ -320,7 +330,9 @@ class ContribPipeline:
             # Create PR
             try:
                 logger.info("📤 Creating PR...")
-                pr_result = await self._pr_manager.create_pr(contribution, repo)
+                pr_result = await self._pr_manager.create_pr(
+                    contribution, repo, guidelines=guidelines
+                )
                 result.prs_created += 1
                 result.prs.append(pr_result)
 

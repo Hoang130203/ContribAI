@@ -33,7 +33,13 @@ class ContributionGenerator:
         self._llm = llm
         self._config = config
 
-    async def generate(self, finding: Finding, context: RepoContext) -> Contribution | None:
+    async def generate(
+        self,
+        finding: Finding,
+        context: RepoContext,
+        *,
+        guidelines=None,
+    ) -> Contribution | None:
         """Generate a contribution for a single finding.
 
         Steps:
@@ -66,7 +72,7 @@ class ContributionGenerator:
             contribution = Contribution(
                 finding=finding,
                 contribution_type=finding.type,
-                title=self._generate_pr_title(finding),
+                title=self._generate_pr_title(finding, guidelines=guidelines),
                 description=finding.description,
                 changes=changes,
                 commit_message=commit_msg,
@@ -247,6 +253,20 @@ class ContributionGenerator:
         files = ", ".join(c.path.split("/")[-1] for c in changes[:3])
 
         if self._config.commit_convention == "conventional":
+            # Try to extract scope from file path
+            scope = ""
+            if changes:
+                parts = changes[0].path.split("/")
+                if (len(parts) >= 2 and parts[0] in ("packages", "apps", "libs")) or (
+                    len(parts) >= 2 and parts[0] == "src"
+                ):
+                    scope = parts[1]
+            if scope:
+                return (
+                    f"{prefix}({scope}): {finding.title.lower()}\n\n"
+                    f"{finding.description}\n\n"
+                    f"Affected files: {files}"
+                )
             return (
                 f"{prefix}: {finding.title.lower()}\n\n"
                 f"{finding.description}\n\n"
@@ -274,8 +294,24 @@ class ContributionGenerator:
         slug = re.sub(r"[^a-zA-Z0-9]+", "-", finding.title.lower()).strip("-")[:40]
         return f"contribai/{prefix}/{slug}"
 
-    def _generate_pr_title(self, finding: Finding) -> str:
-        """Generate a clear PR title."""
+    def _generate_pr_title(self, finding: Finding, *, guidelines=None) -> str:
+        """Generate a PR title adapted to repo conventions."""
+        # Use adaptive title if guidelines available
+        if guidelines and guidelines.has_guidelines:
+            from contribai.github.guidelines import (
+                adapt_pr_title,
+                extract_scope_from_path,
+            )
+
+            scope = extract_scope_from_path(finding.file_path or "", guidelines)
+            return adapt_pr_title(
+                finding.title,
+                finding.type.value,
+                guidelines,
+                scope=scope,
+            )
+
+        # Default: emoji format
         type_labels = {
             ContributionType.SECURITY_FIX: "🔒 Security",
             ContributionType.CODE_QUALITY: "✨ Quality",

@@ -28,7 +28,13 @@ class PRManager:
             self._user = await self._github.get_authenticated_user()
         return self._user
 
-    async def create_pr(self, contribution: Contribution, target_repo: Repository) -> PRResult:
+    async def create_pr(
+        self,
+        contribution: Contribution,
+        target_repo: Repository,
+        *,
+        guidelines=None,
+    ) -> PRResult:
         """Create a PR from a generated contribution.
 
         Full workflow:
@@ -78,7 +84,12 @@ class PRManager:
                 )
 
             # 4. Create PR
-            pr_body = self._generate_pr_body(contribution)
+            if guidelines and guidelines.has_guidelines:
+                from contribai.github.guidelines import adapt_pr_body
+
+                pr_body = adapt_pr_body(contribution, guidelines)
+            else:
+                pr_body = self._generate_pr_body(contribution)
             head = f"{fork_owner}:{branch}"
 
             pr_data = await self._github.create_pull_request(
