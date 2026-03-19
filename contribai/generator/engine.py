@@ -166,7 +166,7 @@ class ContributionGenerator:
         if current_content:
             prompt += (
                 f"\n## Current File Content ({finding.file_path})\n"
-                f"```\n{current_content[:4000]}\n```\n"
+                f"```\n{current_content[:6000]}\n```\n"
             )
 
         prompt += "\n## Output Format\nReturn your changes as a JSON object.\n\n"
@@ -256,35 +256,84 @@ class ContributionGenerator:
                     # Search/replace mode — apply edits to original content
                     original = context.relevant_files.get(path, "")
                     if not original:
-                        logger.warning("No original content for %s, skipping edits", path)
+                        logger.warning(
+                            "No original content for %s (finding file not fetched), skipping edits",
+                            path,
+                        )
                         continue
 
                     new_content = original
                     edits_applied = 0
+                    edits_total = len(item["edits"])
                     for edit in item["edits"]:
                         search = edit.get("search", "")
                         replace = edit.get("replace", "")
                         if not search:
                             continue
+
+                        matched = False
+
+                        # Try 1: Exact match
                         if search in new_content:
                             new_content = new_content.replace(search, replace, 1)
+                            matched = True
+
+                        # Try 2: Normalize trailing whitespace per line
+                        if not matched:
+                            norm_search = "\n".join(line.rstrip() for line in search.split("\n"))
+                            norm_content = "\n".join(
+                                line.rstrip() for line in new_content.split("\n")
+                            )
+                            if norm_search in norm_content:
+                                # Find position in normalized, apply to original
+                                idx = norm_content.index(norm_search)
+                                # Map back: count newlines to find line range
+                                start_line = norm_content[:idx].count("\n")
+                                end_line = start_line + norm_search.count("\n")
+                                lines = new_content.split("\n")
+                                lines[start_line : end_line + 1] = replace.split("\n")
+                                new_content = "\n".join(lines)
+                                matched = True
+                                logger.debug(
+                                    "Fuzzy match (whitespace normalized) for %s",
+                                    path,
+                                )
+
+                        # Try 3: Strip all leading/trailing whitespace
+                        if not matched:
+                            stripped_search = search.strip()
+                            if len(stripped_search) > 20 and stripped_search in new_content:
+                                new_content = new_content.replace(
+                                    stripped_search, replace.strip(), 1
+                                )
+                                matched = True
+                                logger.debug(
+                                    "Fuzzy match (stripped) for %s",
+                                    path,
+                                )
+
+                        if matched:
                             edits_applied += 1
                         else:
                             logger.warning(
-                                "Search text not found in %s: %s...",
+                                "Search text not found in %s (tried exact + fuzzy). "
+                                "Search[:%d]: %.80s...",
                                 path,
-                                search[:60],
+                                len(search),
+                                search.replace("\n", "\\n"),
                             )
 
+                    logger.info(
+                        "Edits for %s: %d/%d applied",
+                        path,
+                        edits_applied,
+                        edits_total,
+                    )
+
                     if edits_applied == 0:
-                        logger.warning("No edits applied to %s", path)
+                        logger.warning("No edits applied to %s, skipping file", path)
                         continue
 
-                    logger.info(
-                        "Applied %d search/replace edits to %s",
-                        edits_applied,
-                        path,
-                    )
                     changes.append(
                         FileChange(
                             path=path,

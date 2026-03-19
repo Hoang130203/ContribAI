@@ -291,18 +291,27 @@ class ContribPipeline:
             analysis.analysis_duration_sec,
         )
 
-        # Build context for generation
+        # Build context for generation — fetch files for ALL findings we'll process
         file_tree = await self._github.get_file_tree(repo.owner, repo.name)
         relevant_files: dict[str, str] = {}
-        for finding in analysis.top_findings[:5]:
+        # Deduplicate file paths across all findings we'll process
+        file_paths_to_fetch = []
+        for finding in analysis.top_findings[:max_prs]:
             if finding.file_path and finding.file_path not in relevant_files:
-                try:
-                    content = await self._github.get_file_content(
-                        repo.owner, repo.name, finding.file_path
-                    )
-                    relevant_files[finding.file_path] = content
-                except Exception:
-                    pass
+                file_paths_to_fetch.append(finding.file_path)
+
+        for fpath in file_paths_to_fetch:
+            try:
+                content = await self._github.get_file_content(repo.owner, repo.name, fpath)
+                relevant_files[fpath] = content
+            except Exception:
+                logger.debug("Could not fetch %s", fpath)
+
+        logger.info(
+            "Fetched %d/%d unique files for code gen",
+            len(relevant_files),
+            len(file_paths_to_fetch),
+        )
 
         from contribai.core.models import RepoContext
 
