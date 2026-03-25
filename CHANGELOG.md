@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.1] - 2026-03-26
+
+### Fixed
+- `summarize_findings()` used `Finding.contribution_type` instead of `Finding.type` — caused `AttributeError` during hunt mode
+- SECURITY.md referenced non-existent email domain — now uses GitHub Issues
+
+### Added
+- 86 new unit tests for v2.4.0 modules (middleware, skills, registry, protocol) — 333 total
+- `docs/ARCHITECTURE.md` — detailed architecture documentation
+- `AGENTS.md` — AI agent guide for Copilot, Claude, Coderabbit
+- `.github/copilot-instructions.md` — GitHub Copilot context
+
+### Changed
+- Updated all .md files for v2.4.0 architecture (README, CONTRIBUTING, SECURITY, PR template, dev workflow)
+- Coverage restored to 53% (was 45% due to untested new modules)
+
 ## [2.4.0] - 2026-03-25
 
 ### Added

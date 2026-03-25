@@ -153,11 +153,7 @@ class CodeAnalyzer:
         # Group by type
         by_type: dict[str, list[str]] = {}
         for f in findings:
-            key = (
-                f.type.value
-                if hasattr(f.type, "value")
-                else str(f.type)
-            )
+            key = f.type.value if hasattr(f.type, "value") else str(f.type)
             by_type.setdefault(key, []).append(f.title)
 
         parts = []
